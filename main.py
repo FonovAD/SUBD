@@ -157,6 +157,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         # Связываем действие "Регионы" с таблицей reg_obl_city
         self.actionRegions.triggered.connect(lambda: self.show_table("reg_obl_city"))
 
+        # Связываем действие "Регионы" с таблицей reg_obl_city
+        self.actionCode.triggered.connect(lambda: self.show_table("expert_grnti"))
+
     def connect_button_actions(self):
         """Связываем кнопки с функциями"""
         self.addButton.clicked.connect(self.add_record)

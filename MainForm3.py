@@ -1,4 +1,4 @@
-# Form implementation generated from reading ui file 'MainForm3.ui'
+# Form implementation generated from reading ui file 'mainform3.ui'
 #
 # Created by: PyQt6 UI code generator 6.9.1
 #
@@ -51,9 +51,12 @@ class Ui_MainWindow(object):
         self.action_7.setObjectName("action_7")
         self.actionExperts = QtGui.QAction(parent=MainWindow)
         self.actionExperts.setObjectName("actionExperts")
+        self.actionCode = QtGui.QAction(parent=MainWindow)
+        self.actionCode.setObjectName("actionCode")
         self.menu.addAction(self.actionExperts)
         self.menu.addAction(self.actionGRNTI)
         self.menu.addAction(self.actionRegions)
+        self.menu.addAction(self.actionCode)
         self.menubar.addAction(self.menu.menuAction())
         self.menubar.addAction(self.menu_2.menuAction())
         self.menubar.addAction(self.menu_3.menuAction())
@@ -74,6 +77,7 @@ class Ui_MainWindow(object):
         self.actionRegions.setText(_translate("MainWindow", "Регионы"))
         self.action_7.setText(_translate("MainWindow", "Таблицы"))
         self.actionExperts.setText(_translate("MainWindow", "Эксперты"))
+        self.actionCode.setText(_translate("MainWindow", "Эксперт-КОД"))
 
 
 if __name__ == "__main__":
