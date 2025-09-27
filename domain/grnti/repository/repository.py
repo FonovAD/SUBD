@@ -16,4 +16,7 @@ class GrntiRepository(ABC):
     @abstractmethod
     def delete_grnti(self, codrub: int) -> Grnti:
         pass
-        
+
+    @abstractmethod
+    def get_all_grnti(self) -> list[Grnti]:
+        pass
