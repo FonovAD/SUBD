@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 
 from domain.models.expert import Expert
 from domain.models.expert_with_grnti import ExpertWithGrnti
-from domain.models.user_grnti import ExpertGrnti
+from domain.models.expert_grnti import ExpertGrnti
 
 
 class ExpertRepository:

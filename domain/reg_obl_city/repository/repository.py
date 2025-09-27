@@ -10,7 +10,7 @@ class RegOblCityRepository(ABC):
         pass
 
     @abstractmethod
-    def get_reg_obl_city(self, id: int) -> RegOblCity:
+    def get_reg_obl_city(self, city: str) -> RegOblCity:
         pass
 
     @abstractmethod
@@ -18,5 +18,5 @@ class RegOblCityRepository(ABC):
         pass
 
     @abstractmethod
-    def delete_reg_obl_city(self, id: int) -> RegOblCity:
+    def delete_reg_obl_city(self, city: str) -> RegOblCity:
         pass
