@@ -247,6 +247,7 @@ class CityComboBox(QComboBox):
     def __init__(self, db_manager, parent=None):
         super().__init__(parent)
         self.db_manager = db_manager
+        self.current_region = None  # Текущий выбранный регион
         self.setEditable(True)
         self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         
@@ -280,8 +281,8 @@ class CityComboBox(QComboBox):
                 
             cursor = self.db_manager.connection.cursor()
             cursor.execute("""
-                SELECT DISTINCT city, region, oblname 
-                FROM reg_obl_city 
+                SELECT DISTINCT city, region, oblname
+                FROM reg_obl_city
                 ORDER BY city
             """)
             self.all_cities = cursor.fetchall()
@@ -290,6 +291,17 @@ class CityComboBox(QComboBox):
         except Exception as e:
             print(f"Ошибка загрузки городов: {e}")
             self.all_cities = []
+    
+    def set_region(self, region):
+        """Устанавливает регион для фильтрации городов"""
+        if self.current_region != region:
+            self.current_region = region
+            # Очищаем кэш поиска при смене региона
+            self.search_cache = {}
+            # Очищаем текущий список городов
+            self.clear()
+            # Очищаем поле ввода
+            self.lineEdit().setText("")
     
     def on_text_changed(self, text):
         """Обновляет список городов при изменении текста"""
@@ -308,9 +320,12 @@ class CityComboBox(QComboBox):
         if len(text) < 2:
             return
             
+        # Создаем ключ кэша с учетом региона
+        cache_key = f"{text}_{self.current_region or 'all'}"
+        
         # Проверяем кэш
-        if text in self.search_cache:
-            self.update_cities_list(self.search_cache[text])
+        if cache_key in self.search_cache:
+            self.update_cities_list(self.search_cache[cache_key])
             return
         
         # Выполняем поиск в кэше
@@ -318,13 +333,17 @@ class CityComboBox(QComboBox):
         filtered_cities = []
         
         for city, region, oblname in self.all_cities:
+            # Фильтруем по региону, если он выбран
+            if self.current_region and region != self.current_region:
+                continue
+                
             if search_text in city.lower():
                 filtered_cities.append((city, region, oblname))
                 if len(filtered_cities) >= 20:  # Ограничиваем количество результатов
                     break
         
         # Сохраняем в кэш
-        self.search_cache[text] = filtered_cities
+        self.search_cache[cache_key] = filtered_cities
         
         # Обновляем список
         self.update_cities_list(filtered_cities)
@@ -488,6 +507,9 @@ class ExpertAddDialog(QDialog):
             expert_layout.addWidget(city_label)
             expert_layout.addWidget(self.city_combo)
             expert_layout.addWidget(city_hint)
+            
+            # Подключаем обработчик изменения региона
+            self.region_combo.currentTextChanged.connect(self.on_region_changed)
         else:
             self.city_combo = QLineEdit()
             expert_layout.addWidget(city_label)
@@ -554,6 +576,12 @@ class ExpertAddDialog(QDialog):
         # Добавляем первую строку для кода ГРНТИ
         self.add_grnti_code()
 
+    def on_region_changed(self, region_text):
+        """Обработчик изменения региона"""
+        if hasattr(self.city_combo, 'set_region'):
+            # Устанавливаем новый регион для фильтрации городов
+            self.city_combo.set_region(region_text.strip() if region_text else None)
+
     def add_grnti_code(self):
         """Добавляет новую строку для кода ГРНТИ"""
         row_count = self.grnti_table.rowCount()
@@ -593,6 +621,31 @@ class ExpertAddDialog(QDialog):
         if not self.name_field.text().strip():
             QMessageBox.warning(self, "Ошибка", "ФИО эксперта обязательно для заполнения")
             return
+        
+        # Валидация и форматирование ФИО
+        name_text = self.name_field.text().strip()
+        is_valid, formatted_name, error_message = NameValidator.validate_and_format_name(name_text)
+        
+        if not is_valid:
+            QMessageBox.warning(self, "Ошибка валидации ФИО", error_message)
+            return
+        
+        # Если имя было отформатировано, обновляем поле и спрашиваем подтверждение
+        if formatted_name != name_text:
+            reply = QMessageBox.question(
+                self,
+                "Форматирование ФИО",
+                f"ФИО было автоматически приведено к стандартному формату:\n\n"
+                f"Исходное: {name_text}\n"
+                f"Форматированное: {formatted_name}\n\n"
+                f"Продолжить с отформатированным именем?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.name_field.setText(formatted_name)
+            else:
+                return
         
         # Проверяем дату
         if self.date_field.text().strip():
@@ -711,6 +764,9 @@ class ExpertEditDialog(QDialog):
             expert_layout.addWidget(city_label)
             expert_layout.addWidget(self.city_combo)
             expert_layout.addWidget(city_hint)
+            
+            # Подключаем обработчик изменения региона
+            self.region_combo.currentTextChanged.connect(self.on_region_changed)
         else:
             self.city_combo = QLineEdit()
             expert_layout.addWidget(city_label)
@@ -772,6 +828,12 @@ class ExpertEditDialog(QDialog):
         
         self.setLayout(main_layout)
 
+    def on_region_changed(self, region_text):
+        """Обработчик изменения региона"""
+        if hasattr(self.city_combo, 'set_region'):
+            # Устанавливаем новый регион для фильтрации городов
+            self.city_combo.set_region(region_text.strip() if region_text else None)
+
     def load_expert_data(self):
         """Загружает данные эксперта в поля формы"""
         if not self.expert_data:
@@ -784,6 +846,9 @@ class ExpertEditDialog(QDialog):
         if len(self.expert_data) > 2:
             region = str(self.expert_data[2]) if self.expert_data[2] else ""
             self.region_combo.setCurrentText(region)
+            # Устанавливаем регион для фильтрации городов
+            if hasattr(self.city_combo, 'set_region'):
+                self.city_combo.set_region(region if region else None)
         if len(self.expert_data) > 3:
             city = str(self.expert_data[3]) if self.expert_data[3] else ""
             if hasattr(self.city_combo, 'lineEdit'):
@@ -873,6 +938,31 @@ class ExpertEditDialog(QDialog):
         if not self.name_field.text().strip():
             QMessageBox.warning(self, "Ошибка", "ФИО эксперта обязательно для заполнения")
             return
+        
+        # Валидация и форматирование ФИО
+        name_text = self.name_field.text().strip()
+        is_valid, formatted_name, error_message = NameValidator.validate_and_format_name(name_text)
+        
+        if not is_valid:
+            QMessageBox.warning(self, "Ошибка валидации ФИО", error_message)
+            return
+        
+        # Если имя было отформатировано, обновляем поле и спрашиваем подтверждение
+        if formatted_name != name_text:
+            reply = QMessageBox.question(
+                self,
+                "Форматирование ФИО",
+                f"ФИО было автоматически приведено к стандартному формату:\n\n"
+                f"Исходное: {name_text}\n"
+                f"Форматированное: {formatted_name}\n\n"
+                f"Продолжить с отформатированным именем?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.name_field.setText(formatted_name)
+            else:
+                return
         
         # Проверяем дату
         if self.date_field.text().strip():
@@ -1599,6 +1689,114 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.db.connection.close()
             print("Соединение с базой данных закрыто")
         event.accept()
+
+
+class NameValidator:
+    """Класс для валидации и форматирования ФИО в формат 'Фамилия И.О.'"""
+    
+    @staticmethod
+    def validate_and_format_name(name_string):
+        """
+        Валидирует и форматирует ФИО в формат 'Фамилия И.О.'
+        
+        Args:
+            name_string (str): Строка с ФИО
+            
+        Returns:
+            tuple: (is_valid, formatted_name, error_message)
+                is_valid (bool): True если удалось привести к нужному формату
+                formatted_name (str): Отформатированное имя или исходная строка
+                error_message (str): Сообщение об ошибке, если валидация не прошла
+        """
+        if not name_string or not name_string.strip():
+            return False, "", "ФИО не может быть пустым"
+        
+        name = name_string.strip()
+        
+        # Проверяем, уже ли в правильном формате "Фамилия И.О."
+        if NameValidator._is_correct_format(name):
+            return True, name, ""
+        
+        # Пытаемся привести к правильному формату
+        formatted_name = NameValidator._try_format_name(name)
+        if formatted_name:
+            return True, formatted_name, ""
+        
+        # Если не удалось привести к формату, возвращаем ошибку
+        return False, name, (
+            "Неверный формат ФИО. Требуется формат 'Фамилия И.О.' "
+            "(например: Иванов И.И.)\n\n"
+            "Поддерживаемые форматы для автоматического преобразования:\n"
+            "• Фамилия Имя Отчество\n"
+            "• Фамилия И. О.\n"
+            "• Фамилия И.О.\n"
+            "• Фамилия И О"
+        )
+    
+    @staticmethod
+    def _is_correct_format(name):
+        """Проверяет, соответствует ли имя формату 'Фамилия И.О.'"""
+        import re
+        # Паттерн: Фамилия (пробел) И. О. или И.О.
+        pattern = r'^[А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.[А-ЯЁ]\.$'
+        return bool(re.match(pattern, name))
+    
+    @staticmethod
+    def _try_format_name(name):
+        """Пытается привести имя к формату 'Фамилия И.О.'"""
+        import re
+        
+        # Убираем лишние пробелы и приводим к единому виду
+        name = ' '.join(name.split())
+        
+        # Случай 1: "Фамилия Имя Отчество"
+        parts = name.split()
+        if len(parts) == 3:
+            surname, first_name, patronymic = parts
+            if (NameValidator._is_valid_name_part(surname) and
+                NameValidator._is_valid_name_part(first_name) and
+                NameValidator._is_valid_name_part(patronymic)):
+                return f"{surname.capitalize()} {first_name[0].upper()}.{patronymic[0].upper()}."
+        
+        # Случай 2: "Фамилия И. О." (с пробелами между инициалами)
+        pattern2 = r'^([А-ЯЁа-яё]+)\s+([А-ЯЁа-яё])\.\s*([А-ЯЁа-яё])\.$'
+        match2 = re.match(pattern2, name)
+        if match2:
+            surname, first_initial, patronymic_initial = match2.groups()
+            if NameValidator._is_valid_name_part(surname):
+                return f"{surname.capitalize()} {first_initial.upper()}.{patronymic_initial.upper()}."
+        
+        # Случай 3: "Фамилия И О" (без точек)
+        pattern3 = r'^([А-ЯЁа-яё]+)\s+([А-ЯЁа-яё])\s+([А-ЯЁа-яё])$'
+        match3 = re.match(pattern3, name)
+        if match3:
+            surname, first_initial, patronymic_initial = match3.groups()
+            if NameValidator._is_valid_name_part(surname):
+                return f"{surname.capitalize()} {first_initial.upper()}.{patronymic_initial.upper()}."
+        
+        # Случай 4: "Фамилия ИО" (слитно без точек)
+        pattern4 = r'^([А-ЯЁа-яё]+)\s+([А-ЯЁа-яё])([А-ЯЁа-яё])$'
+        match4 = re.match(pattern4, name)
+        if match4:
+            surname, first_initial, patronymic_initial = match4.groups()
+            if NameValidator._is_valid_name_part(surname):
+                return f"{surname.capitalize()} {first_initial.upper()}.{patronymic_initial.upper()}."
+        
+        # Случай 5: "Фамилия И.О" (без пробела, одна точка)
+        pattern5 = r'^([А-ЯЁа-яё]+)\s+([А-ЯЁа-яё])\.([А-ЯЁа-яё])$'
+        match5 = re.match(pattern5, name)
+        if match5:
+            surname, first_initial, patronymic_initial = match5.groups()
+            if NameValidator._is_valid_name_part(surname):
+                return f"{surname.capitalize()} {first_initial.upper()}.{patronymic_initial.upper()}."
+        
+        return None
+    
+    @staticmethod
+    def _is_valid_name_part(part):
+        """Проверяет, является ли часть имени валидной (только русские буквы)"""
+        import re
+        return bool(re.match(r'^[А-ЯЁа-яё]+$', part))
 
 
 class DateValidator:
