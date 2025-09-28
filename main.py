@@ -2,8 +2,10 @@ import sys
 import psycopg2
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QTableWidgetItem,
                              QHeaderView, QMessageBox, QDialog, QVBoxLayout,
-                             QLabel, QLineEdit, QDialogButtonBox)
-from PyQt6.QtCore import Qt
+                             QLabel, QLineEdit, QDialogButtonBox, QHBoxLayout,
+                             QPushButton, QTableWidget, QWidget, QScrollArea,
+                             QComboBox, QCompleter)
+from PyQt6.QtCore import Qt, QTimer
 # from MainForm3 import Ui_MainWindow
 from config import DB_CONFIG
 from datetime import datetime
@@ -82,6 +84,222 @@ class DatabaseManager:
         cursor.execute(query, (record_id,))
         self.connection.commit()
         cursor.close()
+
+    def get_combined_data(self):
+        """Получить объединенные данные из всех таблиц"""
+        cursor = self.connection.cursor()
+        
+        # SQL запрос для объединения данных
+        query = """
+        SELECT 
+            e.id as expert_id,
+            e.name as expert_name,
+            e.region,
+            e.city,
+            e.input_date,
+            eg.rubric as grnti_code,
+            gc.description as grnti_description,
+            eg.subrubric,
+            eg.siscipline
+        FROM expert e
+        LEFT JOIN expert_grnti eg ON e.id = eg.id
+        LEFT JOIN grnti_classifier gc ON eg.rubric = gc.codrub
+        ORDER BY e.name
+        """
+        
+        cursor.execute(query)
+        data = cursor.fetchall()
+        cursor.close()
+        return data
+
+    def get_combined_columns(self):
+        """Получить названия столбцов для объединенной таблицы"""
+        return [
+            'expert_id', 'expert_name', 'region', 'city', 'input_date',
+            'grnti_code', 'grnti_description', 'subrubric', 'siscipline'
+        ]
+
+    def insert_expert_with_grnti(self, expert_data, grnti_codes):
+        """Добавить эксперта с кодами ГРНТИ"""
+        cursor = self.connection.cursor()
+        
+        try:
+            # Вставляем эксперта
+            expert_query = """
+                INSERT INTO expert (name, region, city, keywords, group_count, input_date) 
+                VALUES (%s, %s, %s, %s, %s, %s) 
+                RETURNING id
+            """
+            
+            # Форматируем дату для базы данных
+            date_str = expert_data[5]  # Дата добавления
+            if date_str:
+                db_date = DateValidator.format_date_for_db(date_str)
+                if db_date:
+                    expert_data[5] = db_date
+                else:
+                    expert_data[5] = datetime.now().strftime('%Y-%m-%d')
+            else:
+                expert_data[5] = datetime.now().strftime('%Y-%m-%d')
+            
+            cursor.execute(expert_query, expert_data)
+            expert_id = cursor.fetchone()[0]
+            
+            # Вставляем коды ГРНТИ
+            if grnti_codes:
+                grnti_query = """
+                    INSERT INTO expert_grnti (id, rubric, subrubric, siscipline) 
+                    VALUES (%s, %s, %s, %s)
+                """
+                for code, subrubric, discipline in grnti_codes:
+                    cursor.execute(grnti_query, (expert_id, code, subrubric, discipline))
+            
+            self.connection.commit()
+            return expert_id
+            
+        except Exception as e:
+            self.connection.rollback()
+            raise e
+        finally:
+            cursor.close()
+
+    def get_regions(self):
+        """Получить список уникальных регионов"""
+        cursor = self.connection.cursor()
+        cursor.execute("SELECT DISTINCT region FROM reg_obl_city ORDER BY region")
+        regions = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+        return regions
+
+    def get_cities_by_region(self, region):
+        """Получить список городов по региону"""
+        cursor = self.connection.cursor()
+        cursor.execute("SELECT DISTINCT city FROM reg_obl_city WHERE region = %s ORDER BY city", (region,))
+        cities = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+        return cities
+
+    def search_cities(self, search_text):
+        """Поиск городов по частичному совпадению"""
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            SELECT DISTINCT city, region, oblname 
+            FROM reg_obl_city 
+            WHERE city ILIKE %s 
+            ORDER BY city
+        """, (f"%{search_text}%",))
+        results = cursor.fetchall()
+        cursor.close()
+        return results
+
+
+class CityComboBox(QComboBox):
+    """ComboBox с автодополнением для городов"""
+    
+    def __init__(self, db_manager, parent=None):
+        super().__init__(parent)
+        self.db_manager = db_manager
+        self.setEditable(True)
+        self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        
+        # Кэш для результатов поиска
+        self.search_cache = {}
+        
+        # Таймер для задержки поиска
+        self.search_timer = QTimer()
+        self.search_timer.setSingleShot(True)
+        self.search_timer.timeout.connect(self.perform_search)
+        
+        # Настройка автодополнения
+        self.completer = QCompleter()
+        self.completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.setCompleter(self.completer)
+        
+        # Подключаем сигналы
+        self.lineEdit().textChanged.connect(self.on_text_changed)
+        self.currentTextChanged.connect(self.on_text_changed)
+        
+        # Загружаем все города при инициализации для быстрого поиска
+        self.load_all_cities()
+    
+    def load_all_cities(self):
+        """Загружает все города в кэш для быстрого поиска"""
+        try:
+            if not self.db_manager or not self.db_manager.connection:
+                self.all_cities = []
+                return
+                
+            cursor = self.db_manager.connection.cursor()
+            cursor.execute("""
+                SELECT DISTINCT city, region, oblname 
+                FROM reg_obl_city 
+                ORDER BY city
+            """)
+            self.all_cities = cursor.fetchall()
+            cursor.close()
+            print(f"Загружено {len(self.all_cities)} городов в кэш")
+        except Exception as e:
+            print(f"Ошибка загрузки городов: {e}")
+            self.all_cities = []
+    
+    def on_text_changed(self, text):
+        """Обновляет список городов при изменении текста"""
+        # Останавливаем предыдущий таймер
+        self.search_timer.stop()
+        
+        if len(text) >= 2:  # Начинаем поиск с 2 символов
+            # Запускаем поиск с задержкой 300мс
+            self.search_timer.start(300)
+        else:
+            self.clear()
+    
+    def perform_search(self):
+        """Выполняет поиск городов"""
+        text = self.lineEdit().text()
+        if len(text) < 2:
+            return
+            
+        # Проверяем кэш
+        if text in self.search_cache:
+            self.update_cities_list(self.search_cache[text])
+            return
+        
+        # Выполняем поиск в кэше
+        search_text = text.lower()
+        filtered_cities = []
+        
+        for city, region, oblname in self.all_cities:
+            if search_text in city.lower():
+                filtered_cities.append((city, region, oblname))
+                if len(filtered_cities) >= 20:  # Ограничиваем количество результатов
+                    break
+        
+        # Сохраняем в кэш
+        self.search_cache[text] = filtered_cities
+        
+        # Обновляем список
+        self.update_cities_list(filtered_cities)
+    
+    def update_cities_list(self, cities):
+        """Обновляет список городов в ComboBox"""
+        current_text = self.lineEdit().text()
+        self.clear()
+        
+        for city, region, oblname in cities:
+            # Добавляем город с дополнительной информацией
+            display_text = f"{city} ({region}, {oblname})"
+            self.addItem(display_text, city)
+        
+        # Восстанавливаем введенный текст
+        self.lineEdit().setText(current_text)
+    
+    def get_selected_city(self):
+        """Возвращает выбранный город"""
+        current_data = self.currentData()
+        if current_data:
+            return current_data
+        return self.currentText().split(' (')[0]  # Берем только название города
 
 
 class EditDialog(QDialog):
@@ -176,6 +394,225 @@ class EditDialog(QDialog):
         return result
 
 
+class ExpertAddDialog(QDialog):
+    """Диалоговое окно для добавления эксперта с кодами ГРНТИ"""
+
+    def __init__(self, parent=None, db_manager=None):
+        super().__init__(parent)
+        self.db_manager = db_manager
+        self.grnti_codes = []  # Список кодов ГРНТИ
+        self.setup_ui()
+
+    def setup_ui(self):
+        self.setWindowTitle("Добавление эксперта")
+        self.setMinimumSize(500, 400)
+        
+        main_layout = QVBoxLayout()
+        
+        # Основные поля эксперта
+        expert_group = QWidget()
+        expert_layout = QVBoxLayout(expert_group)
+        
+        # ФИО эксперта
+        name_label = QLabel("ФИО эксперта *")
+        self.name_field = QLineEdit()
+        expert_layout.addWidget(name_label)
+        expert_layout.addWidget(self.name_field)
+        
+        # Регион
+        region_label = QLabel("Регион")
+        self.region_combo = QComboBox()
+        self.region_combo.setEditable(True)
+        self.region_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        if self.db_manager:
+            regions = self.db_manager.get_regions()
+            self.region_combo.addItems(regions)
+        expert_layout.addWidget(region_label)
+        expert_layout.addWidget(self.region_combo)
+        
+        # Город
+        city_label = QLabel("Город")
+        if self.db_manager:
+            self.city_combo = CityComboBox(self.db_manager)
+            # Добавляем подсказку
+            city_hint = QLabel("Начните вводить название города (минимум 2 символа)")
+            city_hint.setStyleSheet("color: gray; font-size: 10px;")
+            expert_layout.addWidget(city_label)
+            expert_layout.addWidget(self.city_combo)
+            expert_layout.addWidget(city_hint)
+        else:
+            self.city_combo = QLineEdit()
+            expert_layout.addWidget(city_label)
+            expert_layout.addWidget(self.city_combo)
+        
+        # Ключевые слова
+        keywords_label = QLabel("Ключевые слова")
+        self.keywords_field = QLineEdit()
+        expert_layout.addWidget(keywords_label)
+        expert_layout.addWidget(self.keywords_field)
+        
+        # Количество групп
+        group_count_label = QLabel("Количество групп")
+        self.group_count_field = QLineEdit()
+        self.group_count_field.setText("0")
+        expert_layout.addWidget(group_count_label)
+        expert_layout.addWidget(self.group_count_field)
+        
+        # Дата добавления
+        date_label = QLabel("Дата добавления")
+        self.date_field = QLineEdit()
+        self.date_field.setText(datetime.now().strftime('%d.%m.%Y'))
+        expert_layout.addWidget(date_label)
+        expert_layout.addWidget(self.date_field)
+        
+        main_layout.addWidget(expert_group)
+        
+        # Разделитель
+        separator = QLabel("─" * 50)
+        main_layout.addWidget(separator)
+        
+        # Коды ГРНТИ
+        grnti_group = QWidget()
+        grnti_layout = QVBoxLayout(grnti_group)
+        
+        grnti_header_layout = QHBoxLayout()
+        grnti_label = QLabel("Коды ГРНТИ")
+        self.add_grnti_button = QPushButton("+")
+        self.add_grnti_button.setMaximumWidth(30)
+        self.add_grnti_button.clicked.connect(self.add_grnti_code)
+        grnti_header_layout.addWidget(grnti_label)
+        grnti_header_layout.addStretch()
+        grnti_header_layout.addWidget(self.add_grnti_button)
+        grnti_layout.addLayout(grnti_header_layout)
+        
+        # Таблица для кодов ГРНТИ
+        self.grnti_table = QTableWidget()
+        self.grnti_table.setColumnCount(4)
+        self.grnti_table.setHorizontalHeaderLabels(["Код ГРНТИ", "Подрубрика", "Дисциплина", "Удалить"])
+        self.grnti_table.horizontalHeader().setStretchLastSection(True)
+        grnti_layout.addWidget(self.grnti_table)
+        
+        main_layout.addWidget(grnti_group)
+        
+        # Кнопки
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        main_layout.addWidget(buttons)
+        
+        self.setLayout(main_layout)
+        
+        # Добавляем первую строку для кода ГРНТИ
+        self.add_grnti_code()
+
+    def add_grnti_code(self):
+        """Добавляет новую строку для кода ГРНТИ"""
+        row_count = self.grnti_table.rowCount()
+        self.grnti_table.insertRow(row_count)
+        
+        # Код ГРНТИ
+        code_item = QTableWidgetItem("")
+        self.grnti_table.setItem(row_count, 0, code_item)
+        
+        # Подрубрика
+        subrubric_item = QTableWidgetItem("")
+        self.grnti_table.setItem(row_count, 1, subrubric_item)
+        
+        # Дисциплина
+        discipline_item = QTableWidgetItem("")
+        self.grnti_table.setItem(row_count, 2, discipline_item)
+        
+        # Кнопка удаления
+        delete_button = QPushButton("×")
+        delete_button.setMaximumWidth(30)
+        delete_button.clicked.connect(lambda: self.remove_grnti_code(row_count))
+        self.grnti_table.setCellWidget(row_count, 3, delete_button)
+
+    def remove_grnti_code(self, row):
+        """Удаляет строку с кодом ГРНТИ"""
+        self.grnti_table.removeRow(row)
+        # Обновляем индексы для оставшихся кнопок удаления
+        for i in range(self.grnti_table.rowCount()):
+            button = self.grnti_table.cellWidget(i, 3)
+            if button:
+                button.clicked.disconnect()
+                button.clicked.connect(lambda checked, r=i: self.remove_grnti_code(r))
+
+    def validate_and_accept(self):
+        """Проверяет валидность данных перед принятием"""
+        # Проверяем обязательные поля
+        if not self.name_field.text().strip():
+            QMessageBox.warning(self, "Ошибка", "ФИО эксперта обязательно для заполнения")
+            return
+        
+        # Проверяем дату
+        if self.date_field.text().strip():
+            if not DateValidator.parse_date(self.date_field.text().strip()):
+                QMessageBox.warning(
+                    self,
+                    "Неверный формат даты",
+                    f"Неверный формат даты.\n\n"
+                    f"Поддерживаемые форматы:\n{DateValidator.get_format_examples()}"
+                )
+                return
+        
+        # Проверяем количество групп
+        if self.group_count_field.text().strip():
+            try:
+                int(self.group_count_field.text().strip())
+            except ValueError:
+                QMessageBox.warning(self, "Ошибка", "Количество групп должно быть числом")
+                return
+        
+        # Собираем коды ГРНТИ
+        self.grnti_codes = []
+        for row in range(self.grnti_table.rowCount()):
+            code_item = self.grnti_table.item(row, 0)
+            subrubric_item = self.grnti_table.item(row, 1)
+            discipline_item = self.grnti_table.item(row, 2)
+            
+            code = code_item.text().strip() if code_item else ""
+            subrubric = subrubric_item.text().strip() if subrubric_item else ""
+            discipline = discipline_item.text().strip() if discipline_item else ""
+            
+            if code:  # Добавляем только если есть код
+                try:
+                    code_int = int(code)
+                    subrubric_int = int(subrubric) if subrubric else None
+                    discipline_int = int(discipline) if discipline else None
+                    self.grnti_codes.append((code_int, subrubric_int, discipline_int))
+                except ValueError:
+                    QMessageBox.warning(self, "Ошибка", f"Код ГРНТИ в строке {row + 1} должен быть числом")
+                    return
+        
+        self.accept()
+
+    def get_expert_data(self):
+        """Возвращает данные эксперта"""
+        # Получаем регион
+        region = self.region_combo.currentText().strip()
+        
+        # Получаем город
+        if hasattr(self.city_combo, 'get_selected_city'):
+            city = self.city_combo.get_selected_city()
+        else:
+            city = self.city_combo.text().strip()
+        
+        return [
+            self.name_field.text().strip(),
+            region,
+            city,
+            self.keywords_field.text().strip(),
+            self.group_count_field.text().strip() or "0",
+            self.date_field.text().strip() or datetime.now().strftime('%d.%m.%Y')
+        ]
+
+    def get_grnti_codes(self):
+        """Возвращает коды ГРНТИ"""
+        return self.grnti_codes
+
+
 class MainWindow(QMainWindow, Ui_MainWindow):
     def __init__(self):
         super().__init__()
@@ -192,6 +629,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         screen = QApplication.primaryScreen()
         screen_geometry = screen.availableGeometry()
         self.resize(int(screen_geometry.width() * 0.8), int(screen_geometry.height() * 0.7))
+        
+        # Настройка сортировки таблицы
+        self.setup_table_sorting()
 
         # Словари для русских названий столбцов
         self.column_display_names = {
@@ -200,9 +640,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 'name': 'ФИО эксперта',
                 'region': 'Регион',
                 'city': 'Город',
-                'grnti_code': 'Код ГРНТИ',
                 'keywords': 'Ключевые слова',
-                'participation_count': 'Количество участий',
+                'group_count': 'Количество групп',
                 'input_date': 'Дата добавления'
             },
             'grnti_classifier': {
@@ -218,7 +657,18 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             'expert_grnti': {
                 'id': 'ID',
                 'rubric': 'Рубрика',
-                'subrubric': 'Сабрубрика',
+                'subrubric': 'Подрубрика',
+                'siscipline': 'Дисциплина'
+            },
+            'combined': {
+                'expert_id': 'ID эксперта',
+                'expert_name': 'ФИО эксперта',
+                'region': 'Регион',
+                'city': 'Город',
+                'input_date': 'Дата добавления',
+                'grnti_code': 'Код ГРНТИ',
+                'grnti_description': 'Описание ГРНТИ',
+                'subrubric': 'Подрубрика',
                 'siscipline': 'Дисциплина'
             }
         }
@@ -226,6 +676,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         # Столбцы, содержащие даты (для преобразования формата)
         self.date_columns = {
             'expert': ['input_date'],
+            'combined': ['input_date'],
             # Добавьте другие таблицы с датами по необходимости
         }
 
@@ -242,6 +693,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         # Текущая таблица
         self.current_table = None
+        
+        # Переменные для сортировки
+        self.current_sort_column = -1
+        self.sort_ascending = True
 
     # def check_layout(self):
     #     """Проверка структуры layout"""
@@ -255,6 +710,158 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if not date_string:
             return ""
         return DateValidator.format_date_for_display(date_string) or str(date_string)
+    
+    def setup_table_sorting(self):
+        """Настройка сортировки таблицы"""
+        # Включаем сортировку
+        self.table_widget.setSortingEnabled(True)
+        
+        # Подключаем обработчик клика по заголовкам
+        header = self.table_widget.horizontalHeader()
+        header.sectionClicked.connect(self.on_header_clicked)
+        
+        # Настраиваем заголовки для показа индикатора сортировки
+        header.setSortIndicatorShown(True)
+    
+    def on_header_clicked(self, logical_index):
+        """Обработчик клика по заголовку столбца"""
+        if not self.current_table:
+            return
+            
+        # Если кликнули по тому же столбцу, меняем направление сортировки
+        if self.current_sort_column == logical_index:
+            self.sort_ascending = not self.sort_ascending
+        else:
+            # Если кликнули по новому столбцу, сортируем по возрастанию
+            self.sort_ascending = True
+            self.current_sort_column = logical_index
+        
+        # Выполняем сортировку
+        self.sort_table_data(logical_index, self.sort_ascending)
+    
+    def sort_table_data(self, column_index, ascending=True):
+        """Сортировка данных таблицы по указанному столбцу"""
+        if not self.current_table:
+            return
+            
+        try:
+            # Получаем данные в зависимости от типа таблицы
+            if self.current_table == "combined":
+                data = self.db.get_combined_data()
+                columns = self.db.get_combined_columns()
+                db_column_index = column_index
+            else:
+                data = self.db.get_table_data(self.current_table)
+                columns = self.db.get_columns_names(self.current_table)
+                
+                # Определяем реальный индекс столбца в базе данных
+                # Учитываем, что для таблицы expert первый столбец (id) скрыт
+                if self.current_table == 'expert' and column_index >= 0:
+                    db_column_index = column_index + 1  # +1 потому что id скрыт
+                else:
+                    db_column_index = column_index
+            
+            if db_column_index >= len(columns):
+                return
+                
+            # Сортируем данные
+            sorted_data = sorted(data, key=lambda row: self.get_sort_key(row[db_column_index]), reverse=not ascending)
+            
+            # Обновляем таблицу с отсортированными данными
+            if self.current_table == "combined":
+                self.populate_combined_table_with_data(sorted_data, columns)
+            else:
+                self.populate_table_with_data(sorted_data, columns)
+            
+            # Обновляем индикатор сортировки
+            header = self.table_widget.horizontalHeader()
+            header.setSortIndicator(column_index, Qt.SortOrder.AscendingOrder if ascending else Qt.SortOrder.DescendingOrder)
+            
+            self.statusbar.showMessage(f"Таблица отсортирована по столбцу {column_index + 1} ({'по возрастанию' if ascending else 'по убыванию'})")
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка сортировки", f"Не удалось отсортировать данные: {str(e)}")
+    
+    def get_sort_key(self, value):
+        """Получает ключ для сортировки, обрабатывая разные типы данных"""
+        if value is None:
+            return (0, "")  # Возвращаем кортеж для правильной сортировки None значений
+        
+        # Пытаемся преобразовать в число
+        try:
+            if isinstance(value, (int, float)):
+                return (1, value)  # Числа имеют приоритет 1
+            # Пытаемся преобразовать строку в число
+            if isinstance(value, str):
+                # Убираем пробелы и проверяем, является ли строка числом
+                clean_value = value.strip()
+                if clean_value.replace('.', '').replace('-', '').replace('+', '').isdigit():
+                    return (1, float(clean_value))  # Числа имеют приоритет 1
+        except (ValueError, TypeError):
+            pass
+        
+        # Для дат пытаемся преобразовать в datetime для корректной сортировки
+        if hasattr(value, 'strftime'):
+            return (2, value)  # Даты имеют приоритет 2
+        
+        # Для строк проверяем, является ли это датой
+        date_obj = DateValidator.parse_date(str(value))
+        if date_obj:
+            return (2, date_obj)  # Даты имеют приоритет 2
+        
+        # Возвращаем строку в нижнем регистре для сортировки
+        return (3, str(value).lower())  # Строки имеют приоритет 3
+    
+    def populate_table_with_data(self, data, columns):
+        """Заполняет таблицу данными (используется для обновления после сортировки)"""
+        # Получаем русские названия столбцов
+        display_columns = []
+        for col in columns:
+            if self.current_table == 'expert' and col == 'id':
+                continue
+            if (self.current_table in self.column_display_names and
+                    col in self.column_display_names[self.current_table]):
+                display_columns.append(self.column_display_names[self.current_table][col])
+            else:
+                display_columns.append(col)
+        
+        # Настраиваем таблицу
+        self.table_widget.setColumnCount(len(display_columns))
+        self.table_widget.setHorizontalHeaderLabels(display_columns)
+        self.table_widget.setRowCount(len(data))
+        
+        # Заполняем таблицу данными
+        date_columns = self.date_columns.get(self.current_table, [])
+        
+        for row_num, row_data in enumerate(data):
+            col_num_display = 0
+            for col_num, value in enumerate(row_data):
+                col_name = columns[col_num]
+                
+                if self.current_table == 'expert' and col_name == 'id':
+                    continue
+                
+                # Форматируем даты
+                if col_name in date_columns and value is not None:
+                    if hasattr(value, 'strftime'):
+                        value = value.strftime('%d.%m.%Y')
+                    else:
+                        value = self.format_date(str(value))
+                else:
+                    value = str(value) if value is not None else ""
+                
+                item = QTableWidgetItem(value)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.table_widget.setItem(row_num, col_num_display, item)
+                col_num_display += 1
+        
+        # Автоматическая настройка ширины столбцов
+        self.table_widget.resizeColumnsToContents()
+        
+        # Устанавливаем растягивание
+        header = self.table_widget.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    
     def connect_menu_actions(self):
         """Связываем пункты меню с соответствующими таблицами"""
         # Связываем действие "Эксперты" с таблицей expert
@@ -268,6 +875,16 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         # Связываем действие "Регионы" с таблицей reg_obl_city
         self.actionCode.triggered.connect(lambda: self.show_table("expert_grnti"))
+        
+        # Связываем действие "Общая таблица" с объединенными данными
+        self.actionCombined.triggered.connect(self.show_combined_table)
+        
+        # Связываем действия для вкладки "Группы"
+        self.actionGroups.triggered.connect(self.show_groups_info)
+        
+        # Связываем действия для вкладки "Помощь"
+        self.actionHelp.triggered.connect(self.show_help)
+        self.actionAbout.triggered.connect(self.show_about)
 
     def connect_button_actions(self):
         """Связываем кнопки с функциями"""
@@ -282,57 +899,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             data = self.db.get_table_data(table_name)
             columns = self.db.get_columns_names(table_name)
 
+            # Сбрасываем состояние сортировки при загрузке новой таблицы
+            self.current_sort_column = -1
+            self.sort_ascending = True
+
             self.table_widget.clear()
 
-            # Получаем русские названия столбцов
-            display_columns = []
-
-            for col in columns:
-                if table_name == 'expert' and col == 'id':
-                    continue
-
-                if (table_name in self.column_display_names and
-                        col in self.column_display_names[table_name]):
-                    display_columns.append(self.column_display_names[table_name][col])
-                else:
-                    display_columns.append(col)
-
-            # Настраиваем таблицу
-            self.table_widget.setColumnCount(len(display_columns))
-            self.table_widget.setHorizontalHeaderLabels(display_columns)
-            self.table_widget.setRowCount(len(data))
-
-            # Заполняем таблицу данными
-            date_columns = self.date_columns.get(table_name, [])
-
-            for row_num, row_data in enumerate(data):
-                col_num_display = 0
-                for col_num, value in enumerate(row_data):
-                    col_name = columns[col_num]
-
-                    if table_name == 'expert' and col_name == 'id':
-                        continue
-
-                    # Форматируем даты
-                    if col_name in date_columns and value is not None:
-                        if hasattr(value, 'strftime'):
-                            value = value.strftime('%d.%m.%Y')
-                        else:
-                            value = self.format_date(str(value))
-                    else:
-                        value = str(value) if value is not None else ""
-
-                    item = QTableWidgetItem(value)
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    self.table_widget.setItem(row_num, col_num_display, item)
-                    col_num_display += 1
-
-            # Автоматическая настройка ширины столбцов
-            self.table_widget.resizeColumnsToContents()
-
-            # Устанавливаем растягивание
-            header = self.table_widget.horizontalHeader()
-            header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            # Используем новый метод для заполнения таблицы
+            self.populate_table_with_data(data, columns)
 
             self.statusbar.showMessage(f"Загружена таблица: {table_name}. Записей: {len(data)}")
 
@@ -342,6 +916,117 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить таблицу: {str(e)}")
+
+    def show_combined_table(self):
+        """Отображение объединенной таблицы с данными из всех таблиц"""
+        try:
+            self.current_table = "combined"
+            data = self.db.get_combined_data()
+            columns = self.db.get_combined_columns()
+
+            # Сбрасываем состояние сортировки при загрузке новой таблицы
+            self.current_sort_column = -1
+            self.sort_ascending = True
+
+            self.table_widget.clear()
+
+            # Используем метод для заполнения таблицы
+            self.populate_combined_table_with_data(data, columns)
+
+            self.statusbar.showMessage(f"Загружена объединенная таблица. Записей: {len(data)}")
+
+            # Принудительное обновление геометрии
+            self.table_widget.updateGeometry()
+            self.centralwidget.updateGeometry()
+
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить объединенную таблицу: {str(e)}")
+
+    def populate_combined_table_with_data(self, data, columns):
+        """Заполняет таблицу объединенными данными"""
+        # Получаем русские названия столбцов
+        display_columns = []
+        for col in columns:
+            if (self.current_table in self.column_display_names and
+                    col in self.column_display_names[self.current_table]):
+                display_columns.append(self.column_display_names[self.current_table][col])
+            else:
+                display_columns.append(col)
+
+        # Настраиваем таблицу
+        self.table_widget.setColumnCount(len(display_columns))
+        self.table_widget.setHorizontalHeaderLabels(display_columns)
+        self.table_widget.setRowCount(len(data))
+
+        # Заполняем таблицу данными
+        date_columns = self.date_columns.get(self.current_table, [])
+
+        for row_num, row_data in enumerate(data):
+            for col_num, value in enumerate(row_data):
+                col_name = columns[col_num]
+
+                # Форматируем даты
+                if col_name in date_columns and value is not None:
+                    if hasattr(value, 'strftime'):
+                        value = value.strftime('%d.%m.%Y')
+                    else:
+                        value = self.format_date(str(value))
+                else:
+                    value = str(value) if value is not None else ""
+
+                item = QTableWidgetItem(value)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.table_widget.setItem(row_num, col_num, item)
+
+        # Автоматическая настройка ширины столбцов
+        self.table_widget.resizeColumnsToContents()
+
+        # Устанавливаем растягивание
+        header = self.table_widget.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
+    def show_groups_info(self):
+        """Показать информацию о группах"""
+        QMessageBox.information(
+            self, 
+            "Управление группами", 
+            "Функционал управления группами будет добавлен в следующих версиях.\n\n"
+            "Здесь будет возможность:\n"
+            "• Создавать группы экспертов\n"
+            "• Управлять составом групп\n"
+            "• Назначать руководителей групп\n"
+            "• Просматривать статистику по группам"
+        )
+
+    def show_help(self):
+        """Показать справку"""
+        QMessageBox.information(
+            self, 
+            "Справка", 
+            "Управление экспертизой проектов\n\n"
+            "Основные функции:\n"
+            "• Просмотр и редактирование данных экспертов\n"
+            "• Управление классификацией ГРНТИ\n"
+            "• Работа с региональными данными\n"
+            "• Сортировка данных по столбцам\n"
+            "• Добавление, изменение и удаление записей\n\n"
+            "Сортировка: кликните на заголовок столбца для сортировки\n"
+            "Редактирование: выберите запись и нажмите 'Изменить'\n"
+            "Добавление: нажмите 'Добавить' для создания новой записи"
+        )
+
+    def show_about(self):
+        """Показать информацию о программе"""
+        QMessageBox.about(
+            self, 
+            "О программе", 
+            "Управление экспертизой проектов\n\n"
+            "Версия: 1.0\n"
+            "Разработчик: Система управления экспертизой\n\n"
+            "Программа предназначена для управления данными экспертов,\n"
+            "классификацией ГРНТИ и региональной информацией.\n\n"
+            "© 2025 Все права защищены"
+        )
 
     def setup_adaptive_columns(self):
         """Настройка адаптивного поведения столбцов"""
@@ -371,26 +1056,36 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             return
 
         try:
-            columns = self.db.get_columns_names(self.current_table)
-            display_names = self.column_display_names.get(self.current_table, {})
+            # Специальная обработка для таблицы expert
+            if self.current_table == "expert":
+                dialog = ExpertAddDialog(self, self.db)
+                if dialog.exec():
+                    expert_data = dialog.get_expert_data()
+                    grnti_codes = dialog.get_grnti_codes()
+                    
+                    expert_id = self.db.insert_expert_with_grnti(expert_data, grnti_codes)
+                    self.show_table(self.current_table)
+                    self.statusbar.showMessage(f"Эксперт успешно добавлен с ID: {expert_id}")
+            else:
+                # Обычная обработка для других таблиц
+                columns = self.db.get_columns_names(self.current_table)
+                display_names = self.column_display_names.get(self.current_table, {})
+                date_columns = self.date_columns.get(self.current_table, [])
 
-            # Получаем список колонок с датами для текущей таблицы
-            date_columns = self.date_columns.get(self.current_table, [])
+                dialog = EditDialog(
+                    self.current_table,
+                    columns,
+                    data=None,
+                    parent=self,
+                    display_names=display_names,
+                    date_columns=date_columns
+                )
 
-            dialog = EditDialog(
-                self.current_table,
-                columns,
-                data=None,
-                parent=self,
-                display_names=display_names,
-                date_columns=date_columns
-            )
-
-            if dialog.exec():
-                data = dialog.get_data()
-                self.db.insert_record(self.current_table, data)
-                self.show_table(self.current_table)
-                self.statusbar.showMessage("Запись успешно добавлена")
+                if dialog.exec():
+                    data = dialog.get_data()
+                    self.db.insert_record(self.current_table, data)
+                    self.show_table(self.current_table)
+                    self.statusbar.showMessage("Запись успешно добавлена")
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", f"Не удалось добавить запись: {str(e)}")
             print(f"Ошибка при добавлении: {e}")
