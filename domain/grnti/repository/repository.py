@@ -19,3 +19,7 @@ class GrntiRepository(ABC):
     @abstractmethod
     def get_all_grnti(self) -> list[Grnti]:
         pass
+
+    @abstractmethod
+    def create_grnti(self, grnti: Grnti) -> Grnti:
+        pass

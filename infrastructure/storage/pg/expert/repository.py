@@ -3,18 +3,17 @@ import datetime
 import psycopg2
 from psycopg2.extensions import connection
 
-import domain.expert.repository.repository as repository
-from domain.models import expert
+from domain.expert.repository.repository import ExpertRepository as Repository
 from domain.models.expert import Expert
 from domain.models.expert_with_grnti import ExpertWithGrnti
 from domain.models.grnti import Grnti
 from domain.models.expert_grnti import ExpertGrnti
 from infrastructure.storage.pg.expert.templates import TEMPLATE_GET_EXPERT, TEMPLATE_SET_EXPERT, \
     TEMPLATE_DELETE_EXPERT, TEPLATE_CREATE_GRNTI_EXPERT, TEMPLATE_GET_EXPERT_WITH_GRNTI, TEMPLATE_SET_EXPERT_GRNTI, \
-    TEMPLATE_GET_ALL_WITH_GRNTI
+    TEMPLATE_GET_ALL_WITH_GRNTI, TEMPLATE_GET_ALL_EXPERT
 
 
-class ExpertRepository(repository):
+class ExpertRepository(Repository):
     def __init__(self, conn: connection):
         self.conn = conn
 
@@ -33,6 +32,28 @@ class ExpertRepository(repository):
                     input_date=result[4]
                 )
             return Expert()
+        except (Exception, psycopg2.Error) as error:
+            print(error)
+            raise error
+        finally:
+            cursor.close()
+
+    def get_all_expert(self) -> list[Expert]:
+        """ Получение всех пользователей"""
+        cursor = self.conn.cursor()
+        all_experts = list()
+        try:
+            cursor.execute(TEMPLATE_GET_ALL_EXPERT)
+            results = cursor.fetchall()
+            for result in results:
+                if result:
+                    all_experts.append(Expert(
+                        id=result[0],
+                        name=result[1],
+                        region=result[2],
+                        city=result[3],
+                        input_date=result[4]
+                    ))
         except (Exception, psycopg2.Error) as error:
             print(error)
             raise error

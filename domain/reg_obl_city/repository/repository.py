@@ -20,3 +20,7 @@ class RegOblCityRepository(ABC):
     @abstractmethod
     def delete_reg_obl_city(self, city: str) -> RegOblCity:
         pass
+
+    @abstractmethod
+    def create_reg_obl_city(self, reg_obl_city: RegOblCity) -> RegOblCity:
+        pass

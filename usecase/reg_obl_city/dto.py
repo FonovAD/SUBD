@@ -31,3 +31,15 @@ class DeleteRegOblCityDtoOut(BaseModel):
     region: str
     oblname: str
     city: str
+
+
+class CreateRegOblCityDtoIn(BaseModel):
+    region: str
+    oblname: str
+    city: str
+
+
+class CreateRegOblCityDtoOut(BaseModel):
+    region: str
+    oblname: str
+    city: str

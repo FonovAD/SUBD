@@ -2,7 +2,7 @@ from domain.grnti.repository.repository import GrntiRepository
 from domain.grnti.service.service import GrntiService
 from domain.models.grnti import Grnti
 from usecase.grnti.dto import GetGrntiDtoIn, GetGrntiDtoOut, SetGrntiDtoIn, DeleteGrntiDtoIn, SetGrntiDtoOut, \
-    DeleteGrntiDtoOut, GetAllGrntiDtoOut
+    DeleteGrntiDtoOut, GetAllGrntiDtoOut, CreateGrntiDtoIn, CreateGrntiDtoOut
 
 
 class GrntiUseCase:
@@ -44,3 +44,14 @@ class GrntiUseCase:
                 description=grnti.description,
             ))
         return result
+
+    def create_grnti(self, dto_in: CreateGrntiDtoIn) -> CreateGrntiDtoOut:
+        grnti = Grnti(
+            codrub=dto_in.codrub,
+            description=dto_in.description,
+        )
+        updated_grnti = self.grnti_repository.set_grnti(grnti)
+        return CreateGrntiDtoOut(
+            codrub=updated_grnti.codrub,
+            description=updated_grnti.description,
+        )

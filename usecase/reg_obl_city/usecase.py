@@ -2,7 +2,7 @@ from domain.reg_obl_city.repository.repository import RegOblCityRepository
 from domain.reg_obl_city.service.service import RegOblCityService
 from domain.models.reg_obl_city import RegOblCity
 from usecase.reg_obl_city.dto import GetRegOblCityDtoOut, GetRegOblCityDtoIn, SetRegOblCityDtoIn, SetRegOblCityDtoOut, \
-    DeleteRegOblCityDtoIn, DeleteRegOblCityDtoOut
+    DeleteRegOblCityDtoIn, DeleteRegOblCityDtoOut, CreateRegOblCityDtoIn, CreateRegOblCityDtoOut
 
 
 class RegOblCityUseCase():
@@ -52,4 +52,19 @@ class RegOblCityUseCase():
             region=deleted_roc.region,
             city=deleted_roc.city,
             oblname=deleted_roc.oblname,
+        )
+
+    def create_reg_obl_city(self, dto_in: CreateRegOblCityDtoIn) -> CreateRegOblCityDtoOut:
+        roc = RegOblCity(
+            region=dto_in.region,
+            city=dto_in.city,
+            oblname=dto_in.oblname,
+        )
+        if not self.reg_obl_city_service.validate_reg_obl_city(roc):
+            raise Exception("Invalid reg obl city")
+        updated_roc = self.reg_obl_city_repository.set_reg_obl_city(roc)
+        return CreateRegOblCityDtoOut(
+            region=updated_roc.region,
+            city=updated_roc.city,
+            oblname=updated_roc.oblname,
         )

@@ -4,7 +4,7 @@ import psycopg2
 from psycopg2.extensions import connection
 
 from infrastructure.storage.pg.reg_obl_city.templates import TEMPLATE_GET_REG_OBL_CITY, TEMPLATE_SET_REG_OBL_CITY, \
-    TEMPLATE_DELETE_REG_OBL_CITY, TEMPLATE_GET_ALL_REG_OBL_CITY
+    TEMPLATE_DELETE_REG_OBL_CITY, TEMPLATE_GET_ALL_REG_OBL_CITY, TEMPLATE_CREATE_REG_OBL_CITY
 
 
 class RegOblCityRepository(repository):
@@ -70,6 +70,24 @@ class RegOblCityRepository(repository):
         cursor = self.conn.cursor()
         try:
             cursor.execute(TEMPLATE_DELETE_REG_OBL_CITY % city)
+            result = cursor.fetchone()
+            if result:
+                return RegOblCity(
+                    region=result[0],
+                    oblname=result[1],
+                    city=result[2]
+                )
+            return RegOblCity()
+        except (Exception, psycopg2.Error) as error:
+            print(error)
+            raise error
+        finally:
+            cursor.close()
+
+    def create_reg_obl_city(self, reg_obl_city : RegOblCity) -> RegOblCity:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(TEMPLATE_CREATE_REG_OBL_CITY % (reg_obl_city.region, reg_obl_city.oblname, reg_obl_city.city))
             result = cursor.fetchone()
             if result:
                 return RegOblCity(

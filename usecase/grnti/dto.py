@@ -28,6 +28,17 @@ class DeleteGrntiDtoOut(BaseModel):
     codrub: int
     description: str
 
+
 class GetAllGrntiDtoOut(BaseModel):
+    codrub: int
+    description: str
+
+
+class CreateGrntiDtoIn(BaseModel):
+    codrub: int
+    description: str
+
+
+class CreateGrntiDtoOut(BaseModel):
     codrub: int
     description: str

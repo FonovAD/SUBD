@@ -5,11 +5,16 @@ from domain.models.expert_with_grnti import ExpertWithGrnti
 from domain.models.expert_grnti import ExpertGrnti
 
 
-class ExpertRepository:
+class ExpertRepository(ABC):
 
     @abstractmethod
     def get_expert(self, expert_id: int) -> Expert:
         """ Получение пользователя по ID"""
+        pass
+
+    @abstractmethod
+    def get_all_expert(self) -> list[Expert]:
+        """ Получение всех пользователей"""
         pass
 
     @abstractmethod

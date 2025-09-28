@@ -1,7 +1,10 @@
 
-
 TEMPLATE_GET_EXPERT = """
 SELECT (id, name, region, city, input_date) FROM expert WHERE id = %s;
+"""
+
+TEMPLATE_GET_ALL_EXPERT = """
+SELECT (id, name, region, city, input_date) FROM expert;
 """
 
 TEMPLATE_SET_EXPERT = """

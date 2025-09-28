@@ -26,3 +26,8 @@ RETURNING region, oblname, city;
 """
 
 
+TEMPLATE_CREATE_REG_OBL_CITY = """
+INSERT INTO reg_obl_city (region, oblname, city)
+VALUES (%s, %s, %s)
+RETURNING region, oblname, city;
+"""

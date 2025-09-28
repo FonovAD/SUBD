@@ -1,102 +1,27 @@
 import sys
-import psycopg2
+
 from PySide6.QtWidgets import (QApplication, QMainWindow, QTableWidgetItem,
-                             QHeaderView, QMessageBox, QDialog, QVBoxLayout,
-                             QLabel, QLineEdit, QDialogButtonBox)
+                               QHeaderView, QMessageBox, QDialog, QVBoxLayout,
+                               QLabel, QLineEdit, QDialogButtonBox)
 from PySide6.QtCore import Qt
-# from MainForm3 import Ui_MainWindow
-from datetime import datetime
-from main_form_layout import UiMainWindow
+from PySide6.QtCore import qDebug
+# from presentee.main import DateValidator
 from usecase.expert.usecase import ExpertUseCase
 from usecase.grnti.usecase import GrntiUseCase
+from usecase.reg_obl_city.dto import CreateRegOblCityDtoIn
 from usecase.reg_obl_city.usecase import RegOblCityUseCase
-
-
-class DatabaseManager:
-    def __init__(self):
-        # Подключение к базе данных
-        try:
-            self.connection = psycopg2.connect(**DB_CONFIG)
-            print("Успешное подключение к базе данных!")
-        except Exception as e:
-            print(f"Ошибка подключения: {e}")
-            raise
-
-    def get_table_data(self, table_name):
-        """Получить данные из конкретной таблицы"""
-        cursor = self.connection.cursor()
-        columns = self.get_columns_names(table_name)
-        cursor.execute(f'SELECT * FROM "{table_name}" ORDER BY {columns[0]}')
-        data = cursor.fetchall()
-        cursor.close()
-        return data
-
-    def get_columns_names(self, table_name):
-        """Получить названия столбцов таблицы"""
-        cursor = self.connection.cursor()
-        cursor.execute(f"""
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name = '{table_name}'
-            ORDER BY ordinal_position
-        """)
-        columns = [row[0] for row in cursor.fetchall()]
-        cursor.close()
-        return columns
-
-    def insert_record(self, table_name, data):
-        """Добавить новую запись в таблицу"""
-        cursor = self.connection.cursor()
-        columns = self.get_columns_names(table_name)
-
-        # Формируем SQL запрос
-        placeholders = ', '.join(['%s'] * len(data)) # Создание строки с плейсхолдерами (метка для динамической вставки данных) для параметров
-        columns_str = ', '.join(columns)
-
-        query = f"INSERT INTO {table_name} ({columns_str}) VALUES ({placeholders})"
-
-        cursor.execute(query, data)
-        self.connection.commit()
-        cursor.close()
-
-    def update_record(self, table_name, record_id, data):
-        """Обновить запись в таблице"""
-        cursor = self.connection.cursor()
-        columns = self.get_columns_names(table_name)
-
-        # Формируем SQL запрос
-        set_clause = ', '.join([f"{col} = %s" for col in columns[1:]]) #Пропускаем первый столбец (ID), column1 = %s, column2 = %s...
-        query = f"UPDATE {table_name} SET {set_clause} WHERE {columns[0]} = %s"
-
-        # Добавляем ID в конец данных для условия WHERE
-        data_with_id = data + [record_id]
-
-        cursor.execute(query, data_with_id)
-        self.connection.commit()
-        cursor.close()
-
-    def delete_record(self, table_name, record_id):
-        """Удалить запись из таблицы"""
-        cursor = self.connection.cursor()
-        columns = self.get_columns_names(table_name)
-
-        query = f"DELETE FROM {table_name} WHERE {columns[0]} = %s"
-
-        cursor.execute(query, (record_id,))
-        self.connection.commit()
-        cursor.close()
+from presentee.main_form_layout import UiMainWindow
 
 
 class EditDialog(QDialog):
     """Диалоговое окно для добавления/редактирования записей"""
 
-    def __init__(self, table_name, columns, data=None, parent=None, display_names=None, date_columns=None):
+    def __init__(self, table_name, columns, data=None, parent=None, display_names=None):
         super().__init__(parent)
         self.table_name = table_name
         self.columns = columns
         self.data = data
         self.display_names = display_names or {}
-        self.date_columns = date_columns or []  # Список колонок с датами
         self.setup_ui()
 
     def setup_ui(self):
@@ -114,8 +39,9 @@ class EditDialog(QDialog):
             if self.data and i < len(self.data):
                 # Если это колонка с датой, форматируем для отображения
                 if column in self.date_columns:
-                    formatted_date = DateValidator.format_date_for_display(str(self.data[i]))
-                    field.setText(formatted_date if formatted_date else str(self.data[i]))
+                    # formatted_date = DateValidator.format_date_for_display(str(self.data[i]))
+                    # field.setText(formatted_date if formatted_date else str(self.data[i]))
+                    pass
                 else:
                     field.setText(str(self.data[i]))
             else:
@@ -128,10 +54,10 @@ class EditDialog(QDialog):
             self.layout.addWidget(field)
 
         # Добавляем подсказку о форматах дат, если есть даты в форме
-        if self.date_columns:
-            hint_label = QLabel(f"Поддерживаемые форматы дат: {DateValidator.get_format_examples()}")
-            hint_label.setStyleSheet("color: gray; font-size: 10px;")
-            self.layout.addWidget(hint_label)
+        # if self.date_columns:
+        #     hint_label = QLabel(f"Поддерживаемые форматы дат: {DateValidator.get_format_examples()}")
+        #     hint_label.setStyleSheet("color: gray; font-size: 10px;")
+        #     self.layout.addWidget(hint_label)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
                                    QDialogButtonBox.StandardButton.Cancel)
@@ -148,53 +74,40 @@ class EditDialog(QDialog):
             if column in self.fields:
                 date_value = self.fields[column].text().strip()
                 if date_value:  # Если поле не пустое
-                    if not DateValidator.parse_date(date_value):
-                        QMessageBox.warning(
-                            self,
-                            "Неверный формат даты",
-                            f"Поле '{self.display_names.get(column, column)}' содержит неверный формат даты.\n\n"
-                            f"Поддерживаемые форматы:\n{DateValidator.get_format_examples()}"
-                        )
-                        return
+                    # if not DateValidator.parse_date(date_value):
+                    #     QMessageBox.warning(
+                    #         self,
+                    #         "Неверный формат даты",
+                    #         f"Поле '{self.display_names.get(column, column)}' содержит неверный формат даты.\n\n"
+                    #         f"Поддерживаемые форматы:\n{DateValidator.get_format_examples()}"
+                    #     )
+                    #     return
+                    pass
 
         self.accept()
 
-    def get_data(self):
-        """Получить данные из полей ввода с преобразованием дат"""
-        result = []
-        for column in self.columns:
-            if column in self.fields:
-                value = self.fields[column].text()
-                # Преобразуем даты в формат БД
-                if column in self.date_columns:
-                    if value and value.strip():  # Проверяем, что строка не пустая
-                        db_date = DateValidator.format_date_for_db(value.strip())
-                        result.append(db_date if db_date else value)
-                    else:
-                        result.append("")  # Пустая строка для пустых дат
-                else:
-                    result.append(value)
-            else:
-                result.append("")
-        return result
+
+sys.stdout.reconfigure(line_buffering=True)
 
 
-class MainWindow(QMainWindow, Ui_MainWindow):
-    def __init__(self, expert_usecase : ExpertUseCase, grnti_usecase : GrntiUseCase, reg_obl_city_usecase : RegOblCityUseCase):
+class MainWindow(QMainWindow, UiMainWindow):
+    def __init__(self, expert_usecase: ExpertUseCase, grnti_usecase: GrntiUseCase,
+                 reg_obl_city_usecase: RegOblCityUseCase):
         super().__init__()
-        self.setupUi(self)
+        sys.stdout.flush()
+        self.setupUi()
         self.expert_usecase = expert_usecase
         self.grnti_usecase = grnti_usecase
         self.reg_obl_city_usecase = reg_obl_city_usecase
+        qDebug("2")
 
-        # self.check_layout()
-        # self.setup_layout()
+        # TODO: подумать как не хардкодить имена колонок
+        self.display_names = ("region", "oblname", "city")
 
         # Настройка интерфейса
         self.setWindowTitle("Управление экспертизой проектов")
         self.setMinimumSize(800, 600)
-        # Настраиваем адаптивный layout
-
+        qDebug("3")
         # Устанавливаем начальный размер окна (можно настроить под ваш экран)
         screen = QApplication.primaryScreen()
         screen_geometry = screen.availableGeometry()
@@ -202,75 +115,33 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         # Словари для русских названий столбцов
         self.column_display_names = {
-            'expert': {
-                'id': 'ID',
-                'name': 'ФИО эксперта',
-                'region': 'Регион',
-                'city': 'Город',
-                'grnti_code': 'Код ГРНТИ',
-                'keywords': 'Ключевые слова',
-                'participation_count': 'Количество участий',
-                'input_date': 'Дата добавления'
-            },
-            'grnti_classifier': {
-                'codrub': 'Код ГРНТИ',
-                'description': 'Название рубрики'
-            },
             'reg_obl_city': {
                 'id': 'ID',
                 'region': 'Федеральный округ',
                 'oblname': 'Субъект федерации',
                 'city': 'Город'
-            },
-            'expert_grnti': {
-                'id': 'ID',
-                'rubric': 'Рубрика',
-                'subrubric': 'Сабрубрика',
-                'siscipline': 'Дисциплина'
             }
         }
 
-        # Столбцы, содержащие даты (для преобразования формата)
-        self.date_columns = {
-            'expert': ['input_date'],
-            # Добавьте другие таблицы с датами по необходимости
-        }
-
+        qDebug("4")
         # Текущая таблица
         self.current_table = None
 
-    def format_date(self, date_string):
-        """Преобразование даты в формат для отображения"""
-        if not date_string:
-            return ""
-        return DateValidator.format_date_for_display(date_string) or str(date_string)
-
-    def connect_menu_actions(self):
-        """Связываем пункты меню с соответствующими таблицами"""
-        # Связываем действие "Эксперты" с таблицей expert
-        self.actionExperts.triggered.connect(lambda: self.expert_usecase.get_all_expert())
-
-        # Связываем действие "ГРНТИ" с таблицей grnti_classifier
-        self.actionGRNTI.triggered.connect(lambda: self.show_table("grnti_classifier"))
-
-        # Связываем действие "Регионы" с таблицей reg_obl_city
         self.actionRegions.triggered.connect(lambda: self.reg_obl_city_usecase.get_all_reg_obl_city())
-
-        # Связываем действие "Регионы" с таблицей reg_obl_city
-        self.actionCode.triggered.connect(lambda: self.grnti_usecase.get_all_grnti())
-
-    def connect_button_actions(self):
-        """Связываем кнопки с функциями"""
+        qDebug("5")
         self.addButton.clicked.connect(self.add_record)
+        qDebug("6")
         self.editButton.clicked.connect(self.edit_record)
+        qDebug("7")
         self.deleteButton.clicked.connect(self.delete_record)
+        qDebug("8")
 
-    def show_table(self, table_name):
+    def show_table(self):
         """Отображение содержимого таблицы"""
         try:
-            self.current_table = table_name
-            data = self.db.get_table_data(table_name)
-            columns = self.db.get_columns_names(table_name)
+            # self.current_table = table_name
+            data = self.reg_obl_city_usecase.get_all_reg_obl_city()
+            columns = self.display_names
 
             self.table_widget.clear()
 
@@ -278,14 +149,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             display_columns = []
 
             for col in columns:
-                if table_name == 'expert' and col == 'id':
-                    continue
-
-                if (table_name in self.column_display_names and
-                        col in self.column_display_names[table_name]):
-                    display_columns.append(self.column_display_names[table_name][col])
-                else:
-                    display_columns.append(col)
+                display_columns.append(self.column_display_names["reg_obl_city"][col])
 
             # Настраиваем таблицу
             self.table_widget.setColumnCount(len(display_columns))
@@ -293,29 +157,16 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.table_widget.setRowCount(len(data))
 
             # Заполняем таблицу данными
-            date_columns = self.date_columns.get(table_name, [])
-
             for row_num, row_data in enumerate(data):
-                col_num_display = 0
-                for col_num, value in enumerate(row_data):
-                    col_name = columns[col_num]
-
-                    if table_name == 'expert' and col_name == 'id':
-                        continue
-
-                    # Форматируем даты
-                    if col_name in date_columns and value is not None:
-                        if hasattr(value, 'strftime'):
-                            value = value.strftime('%d.%m.%Y')
-                        else:
-                            value = self.format_date(str(value))
-                    else:
-                        value = str(value) if value is not None else ""
-
-                    item = QTableWidgetItem(value)
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    self.table_widget.setItem(row_num, col_num_display, item)
-                    col_num_display += 1
+                item1 = QTableWidgetItem(row_data.region)
+                item1.setFlags(item1.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.table_widget.setItem(row_num, 0, item1)
+                item2 = QTableWidgetItem(row_data.oblname)
+                item2.setFlags(item2.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.table_widget.setItem(row_num, 1, item2)
+                item3 = QTableWidgetItem(row_data.city)
+                item3.setFlags(item3.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.table_widget.setItem(row_num, 3, item3)
 
             # Автоматическая настройка ширины столбцов
             self.table_widget.resizeColumnsToContents()
@@ -324,7 +175,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             header = self.table_widget.horizontalHeader()
             header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
-            self.statusbar.showMessage(f"Загружена таблица: {table_name}. Записей: {len(data)}")
+            self.statusbar.showMessage(f"Загружена таблица: reg_obl_city. Записей: {len(data)}")
 
             # Принудительное обновление геометрии
             self.table_widget.updateGeometry()
@@ -355,37 +206,39 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
     def add_record(self):
+        print("called add_record")
         """Добавить новую запись"""
         if not self.current_table:
             QMessageBox.warning(self, "Ошибка", "Сначала выберите таблицу")
             return
 
         try:
-            columns = self.db.get_columns_names(self.current_table)
-            display_names = self.column_display_names.get(self.current_table, {})
-
-            # Получаем список колонок с датами для текущей таблицы
-            date_columns = self.date_columns.get(self.current_table, [])
+            columns = self.reg_obl_city_usecase.get_all_reg_obl_city()
 
             dialog = EditDialog(
                 self.current_table,
                 columns,
                 data=None,
                 parent=self,
-                display_names=display_names,
-                date_columns=date_columns
+                display_names="",
             )
 
             if dialog.exec():
                 data = dialog.get_data()
-                self.db.insert_record(self.current_table, data)
-                self.show_table(self.current_table)
+                dto = CreateRegOblCityDtoIn(
+                    region=data[0],
+                    oblname=data[1],
+                    city=data[2],
+                )
+                self.reg_obl_city_usecase.create_reg_obl_city(dto)
+                self.reg_obl_city_usecase.get_all_reg_obl_city()
                 self.statusbar.showMessage("Запись успешно добавлена")
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", f"Не удалось добавить запись: {str(e)}")
             print(f"Ошибка при добавлении: {e}")
 
     def edit_record(self):
+        print("called edit_record")
         """Редактировать выбранную запись"""
         if not self.current_table:
             QMessageBox.warning(self, "Ошибка", "Сначала выберите таблицу")
@@ -398,7 +251,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         try:
             # Получаем СЫРЫЕ данные из базы данных для выбранной строки
-            table_data = self.db.get_table_data(self.current_table)
+            table_data = self.reg_obl_city_usecase.get_all_reg_obl_city()
             if selected_row >= len(table_data):
                 QMessageBox.warning(self, "Ошибка", "Неверный индекс строки")
                 return
@@ -420,8 +273,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 if value is None:
                     row_data.append("")
                 elif column_name in date_columns and hasattr(value, 'strftime'):
-                    formatted_date = DateValidator.format_date_for_display(value.strftime('%Y-%m-%d'))
-                    row_data.append(formatted_date if formatted_date else str(value))
+                    # formatted_date = DateValidator.format_date_for_display(value.strftime('%Y-%m-%d'))
+                    # row_data.append(formatted_date if formatted_date else str(value))
+                    pass
                 else:
                     row_data.append(str(value))
 
@@ -455,6 +309,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             print(f"Ошибка при редактировании: {e}")
 
     def delete_record(self):
+        print("called delete_record")
         """Удалить выбранную запись"""
         if not self.current_table:
             QMessageBox.warning(self, "Ошибка", "Сначала выберите таблицу")
@@ -467,7 +322,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         try:
             # Получаем ID из базы данных, так как в интерфейсе он скрыт
-            table_data = self.db.get_table_data(self.current_table)
+            table_data = self.reg_obl_city_usecase.get_all_reg_obl_city()
             if selected_row >= len(table_data):
                 QMessageBox.warning(self, "Ошибка", "Неверный индекс строки")
                 return
@@ -527,97 +382,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             # Если не помещаются - включаем прокрутку
             header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
 
-    # def adjust_table_size(self):
-    #     """Корректировка размера таблицы при изменении размера окна"""
-    #     if hasattr(self, 'table_widget') and self.table_widget.isVisible():
-    #         # Обновляем растягивание столбцов
-    #         header = self.table_widget.horizontalHeader()
-    #
-    #         # Сначала подгоняем по содержимому
-    #         self.table_widget.resizeColumnsToContents()
-    #
-    #         # Проверяем, нужно ли растягивать
-    #         total_width = sum([self.table_widget.columnWidth(i) for i in range(self.table_widget.columnCount())])
-    #         table_width = self.table_widget.viewport().width()
-    #
-    #         if total_width < table_width:
-    #             header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-    #         else:
-    #             header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-    #
-    #         # Принудительное обновление таблицы
-    #         self.table_widget.updateGeometry()
-
     def closeEvent(self, event):
         """Закрытие соединения с базой данных при выходе"""
         if hasattr(self, 'db'):
             self.db.connection.close()
             print("Соединение с базой данных закрыто")
         event.accept()
-
-
-class DateValidator:
-    """Класс для валидации и преобразования дат"""
-
-    @staticmethod
-    def get_supported_formats():
-        """Возвращает поддерживаемые форматы дат"""
-        return [
-            '%Y-%m-%d',  # 2023-12-31
-            '%d.%m.%Y',  # 31.12.2023
-            '%d/%m/%Y',  # 31/12/2023
-            '%Y/%m/%d',  # 2023/12/31
-            '%d-%m-%Y',  # 31-12-2023
-        ]
-
-    @staticmethod
-    def parse_date(date_string):
-        """Пытается распарсить дату в различных форматах"""
-        if not date_string or date_string.strip() == "":
-            return None
-
-        date_string = date_string.strip()
-
-        for fmt in DateValidator.get_supported_formats():
-            try:
-                return datetime.strptime(date_string, fmt)
-            except ValueError:
-                continue
-        return None
-
-    @staticmethod
-    def format_date_for_db(date_string):
-        """Преобразует дату в формат базы данных (YYYY-MM-DD)"""
-        date_obj = DateValidator.parse_date(date_string)
-        if date_obj:
-            return date_obj.strftime('%Y-%m-%d')
-        return None
-
-    @staticmethod
-    def format_date_for_display(date_input):
-        """Преобразует дату в формат для отображения (DD.MM.YYYY)"""
-        if not date_input:
-            return None
-
-        # Если пришел объект datetime или date
-        if hasattr(date_input, 'strftime'):
-            return date_input.strftime('%d.%m.%Y')
-
-        # Если пришла строка
-        date_string = str(date_input).strip()
-        if not date_string:
-            return None
-
-        date_obj = DateValidator.parse_date(date_string)
-        if date_obj:
-            return date_obj.strftime('%d.%m.%Y')
-        return None
-
-    @staticmethod
-    def get_format_examples():
-        """Возвращает примеры правильных форматов для сообщения об ошибке"""
-        examples = []
-        today = datetime.now()
-        for fmt in DateValidator.get_supported_formats():
-            examples.append(today.strftime(fmt))
-        return ", ".join(examples)

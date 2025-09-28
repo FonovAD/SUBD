@@ -1,4 +1,4 @@
-from infrastructure.storage.pg.expert.templates import TEMPLATE_DELETE_EXPERT
+from infrastructure.storage.pg.expert.templates import TEMPLATE_DELETE_EXPERT, TEMPLATE_CREATE_EXPERT
 
 TEMPLATE_GET_GRNTI = """
 SELECT codrub, description 
@@ -23,4 +23,10 @@ TEMPLATE_GET_ALL_GRNTI = """
 SELECT codrub, description 
 FROM grnti_classifier 
 ORDER BY codrub;
+"""
+
+TEMPLATE_CREATE_GRNTI = """
+INSERT INTO grnti_classifier(codrub, description)
+VALUES (%s, %s)
+RETURNING codrub, description;
 """

@@ -33,6 +33,20 @@ class ExpertUseCase:
             input_date=expert.input_date
         )
 
+    def get_all_expert(self) -> list[Expert]:
+        """ Получение всех пользователей"""
+        result = list()
+        experts = self.expertRepository.get_all_expert()
+        for e in experts:
+            result.append(GetExpertDtoOut(
+                id=e.id,
+                name=e.name,
+                region=e.region,
+                city=e.city,
+                input_date=e.input_date
+            ))
+        return result
+
     def set_expert(self, dto_in: SetExpertDtoIn) -> SetExpertDtoOut:
         """Изменение параметров эксперта"""
         expert = Expert(
@@ -169,4 +183,3 @@ class ExpertUseCase:
             return self.expertService.validate_expert(temp_expert)
         except Exception:
             return False
-
