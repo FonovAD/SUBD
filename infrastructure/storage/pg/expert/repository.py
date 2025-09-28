@@ -4,6 +4,7 @@ import psycopg2
 from psycopg2.extensions import connection
 
 import domain.expert.repository.repository as repository
+from domain.models import expert
 from domain.models.expert import Expert
 from domain.models.expert_with_grnti import ExpertWithGrnti
 from domain.models.grnti import Grnti
@@ -89,7 +90,7 @@ class ExpertRepository(repository):
 
             expert.id = result[0]
 
-            expertWithGrntiRecords = list()
+            expert_with_grnti_records = list()
 
             for grnti in grnti_list:
                 cursor.execute(
@@ -97,14 +98,14 @@ class ExpertRepository(repository):
                 )
                 result = cursor.fetchone()
                 if result:
-                    expertWithGrntiRecords.append(ExpertWithGrnti(
+                    expert_with_grnti_records.append(ExpertWithGrnti(
                         expert=expert,
                         grnti=Grnti(
                             codrub=result[0],
                             description=result[3]),
                         expert_grnti=grnti
                     ))
-            return expertWithGrntiRecords
+            return expert_with_grnti_records
         except (Exception, psycopg2.Error) as error:
             print(error)
             raise error
@@ -166,31 +167,31 @@ class ExpertRepository(repository):
     def get_all_expert_with_grnti(self) -> list[ExpertWithGrnti]:
         """ Получение всех пользователей с их ГРНТИ и расшифровкой"""
         cursor = self.conn.cursor()
-        expertWithGrntiRecords = list()
+        expert_with_grnti_records = list()
         try:
             cursor.execute(TEMPLATE_GET_ALL_WITH_GRNTI)
             result = cursor.fetchall()
             for r in result:
-                expertWithGrntiRecords.append(
+                expert_with_grnti_records.append(
                     ExpertWithGrnti(
                         expert=Expert(
-                            id=result[0],
-                            name=result[1],
-                            region=result[2],
-                            city=result[3],
-                            input_date=result[4]),
+                            id=r[0],
+                            name=r[1],
+                            region=r[2],
+                            city=r[3],
+                            input_date=r[4]),
                         expert_grnti=ExpertGrnti(
-                            expertID=result[0],
-                            rubric=result[5],
-                            subrubric=result[6],
-                            discipline=result[7],
+                            expertID=r[0],
+                            rubric=r[5],
+                            subrubric=r[6],
+                            discipline=r[7],
                         ),
                         grnti=Grnti(
-                            codrub=result[5],
-                            description=result[8],
+                            codrub=r[5],
+                            description=r[8],
                         )
                 ))
-            return expertWithGrntiRecords()
+            return expert_with_grnti_records
         except (Exception, psycopg2.Error) as error:
             print(error)
             raise error

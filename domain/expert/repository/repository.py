@@ -23,7 +23,7 @@ class ExpertRepository:
         pass
 
     @abstractmethod
-    def create_expert_with_grnti(self, expert: Expert, grnti_list : list[ExpertGrnti]) -> ExpertWithGrnti:
+    def create_expert_with_grnti(self, expert: Expert, grnti_list : list[ExpertGrnti]) -> list[ExpertWithGrnti]:
         """ Создание пользователя с несколькими кодами ГРНТИ"""
         pass
 

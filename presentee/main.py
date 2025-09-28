@@ -1,9 +1,9 @@
 import sys
 import psycopg2
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QTableWidgetItem,
+from PySide6.QtWidgets import (QApplication, QMainWindow, QTableWidgetItem,
                              QHeaderView, QMessageBox, QDialog, QVBoxLayout,
                              QLabel, QLineEdit, QDialogButtonBox)
-from PyQt6.QtCore import Qt
+from PySide6.QtCore import Qt
 # from MainForm3 import Ui_MainWindow
 from config import DB_CONFIG
 from datetime import datetime
@@ -513,7 +513,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         super().resizeEvent(event)
 
         # Небольшая задержка для корректного обновления
-        from PyQt6.QtCore import QTimer
+        from PySide6.QtCore import QTimer
         QTimer.singleShot(50, self.adaptive_resize_columns)
 
     def adaptive_resize_columns(self):
