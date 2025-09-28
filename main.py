@@ -183,14 +183,62 @@ class DatabaseManager:
         """Поиск городов по частичному совпадению"""
         cursor = self.connection.cursor()
         cursor.execute("""
-            SELECT DISTINCT city, region, oblname 
-            FROM reg_obl_city 
-            WHERE city ILIKE %s 
+            SELECT DISTINCT city, region, oblname
+            FROM reg_obl_city
+            WHERE city ILIKE %s
             ORDER BY city
         """, (f"%{search_text}%",))
         results = cursor.fetchall()
         cursor.close()
         return results
+
+    def update_expert_with_grnti(self, expert_id, expert_data, grnti_codes):
+        """Обновить эксперта с кодами ГРНТИ"""
+        cursor = self.connection.cursor()
+        
+        try:
+            # Обновляем данные эксперта
+            expert_query = """
+                UPDATE expert
+                SET name = %s, region = %s, city = %s, keywords = %s, group_count = %s, input_date = %s
+                WHERE id = %s
+            """
+            
+            # Форматируем дату для базы данных
+            date_str = expert_data[5]  # Дата добавления
+            if date_str:
+                db_date = DateValidator.format_date_for_db(date_str)
+                if db_date:
+                    expert_data[5] = db_date
+                else:
+                    expert_data[5] = datetime.now().strftime('%Y-%m-%d')
+            else:
+                expert_data[5] = datetime.now().strftime('%Y-%m-%d')
+            
+            # Добавляем expert_id в конец для WHERE условия
+            update_data = expert_data + [expert_id]
+            cursor.execute(expert_query, update_data)
+            
+            # Удаляем старые коды ГРНТИ
+            cursor.execute("DELETE FROM expert_grnti WHERE id = %s", (expert_id,))
+            
+            # Вставляем новые коды ГРНТИ
+            if grnti_codes:
+                grnti_query = """
+                    INSERT INTO expert_grnti (id, rubric, subrubric, siscipline)
+                    VALUES (%s, %s, %s, %s)
+                """
+                for code, subrubric, discipline in grnti_codes:
+                    cursor.execute(grnti_query, (expert_id, code, subrubric, discipline))
+            
+            self.connection.commit()
+            return expert_id
+            
+        except Exception as e:
+            self.connection.rollback()
+            raise e
+        finally:
+            cursor.close()
 
 
 class CityComboBox(QComboBox):
@@ -521,6 +569,286 @@ class ExpertAddDialog(QDialog):
         
         # Дисциплина
         discipline_item = QTableWidgetItem("")
+        self.grnti_table.setItem(row_count, 2, discipline_item)
+        
+        # Кнопка удаления
+        delete_button = QPushButton("×")
+        delete_button.setMaximumWidth(30)
+        delete_button.clicked.connect(lambda: self.remove_grnti_code(row_count))
+        self.grnti_table.setCellWidget(row_count, 3, delete_button)
+
+    def remove_grnti_code(self, row):
+        """Удаляет строку с кодом ГРНТИ"""
+        self.grnti_table.removeRow(row)
+        # Обновляем индексы для оставшихся кнопок удаления
+        for i in range(self.grnti_table.rowCount()):
+            button = self.grnti_table.cellWidget(i, 3)
+            if button:
+                button.clicked.disconnect()
+                button.clicked.connect(lambda checked, r=i: self.remove_grnti_code(r))
+
+    def validate_and_accept(self):
+        """Проверяет валидность данных перед принятием"""
+        # Проверяем обязательные поля
+        if not self.name_field.text().strip():
+            QMessageBox.warning(self, "Ошибка", "ФИО эксперта обязательно для заполнения")
+            return
+        
+        # Проверяем дату
+        if self.date_field.text().strip():
+            if not DateValidator.parse_date(self.date_field.text().strip()):
+                QMessageBox.warning(
+                    self,
+                    "Неверный формат даты",
+                    f"Неверный формат даты.\n\n"
+                    f"Поддерживаемые форматы:\n{DateValidator.get_format_examples()}"
+                )
+                return
+        
+        # Проверяем количество групп
+        if self.group_count_field.text().strip():
+            try:
+                int(self.group_count_field.text().strip())
+            except ValueError:
+                QMessageBox.warning(self, "Ошибка", "Количество групп должно быть числом")
+                return
+        
+        # Собираем коды ГРНТИ
+        self.grnti_codes = []
+        for row in range(self.grnti_table.rowCount()):
+            code_item = self.grnti_table.item(row, 0)
+            subrubric_item = self.grnti_table.item(row, 1)
+            discipline_item = self.grnti_table.item(row, 2)
+            
+            code = code_item.text().strip() if code_item else ""
+            subrubric = subrubric_item.text().strip() if subrubric_item else ""
+            discipline = discipline_item.text().strip() if discipline_item else ""
+            
+            if code:  # Добавляем только если есть код
+                try:
+                    code_int = int(code)
+                    subrubric_int = int(subrubric) if subrubric else None
+                    discipline_int = int(discipline) if discipline else None
+                    self.grnti_codes.append((code_int, subrubric_int, discipline_int))
+                except ValueError:
+                    QMessageBox.warning(self, "Ошибка", f"Код ГРНТИ в строке {row + 1} должен быть числом")
+                    return
+        
+        self.accept()
+
+    def get_expert_data(self):
+        """Возвращает данные эксперта"""
+        # Получаем регион
+        region = self.region_combo.currentText().strip()
+        
+        # Получаем город
+        if hasattr(self.city_combo, 'get_selected_city'):
+            city = self.city_combo.get_selected_city()
+        else:
+            city = self.city_combo.text().strip()
+        
+        return [
+            self.name_field.text().strip(),
+            region,
+            city,
+            self.keywords_field.text().strip(),
+            self.group_count_field.text().strip() or "0",
+            self.date_field.text().strip() or datetime.now().strftime('%d.%m.%Y')
+        ]
+
+    def get_grnti_codes(self):
+        """Возвращает коды ГРНТИ"""
+        return self.grnti_codes
+
+
+class ExpertEditDialog(QDialog):
+    """Диалоговое окно для редактирования эксперта с кодами ГРНТИ"""
+
+    def __init__(self, expert_data, expert_id, parent=None, db_manager=None):
+        super().__init__(parent)
+        self.db_manager = db_manager
+        self.expert_id = expert_id
+        self.expert_data = expert_data
+        self.grnti_codes = []  # Список кодов ГРНТИ
+        self.setup_ui()
+        self.load_expert_data()
+        self.load_grnti_codes()
+
+    def setup_ui(self):
+        self.setWindowTitle("Редактирование эксперта")
+        self.setMinimumSize(500, 400)
+        
+        main_layout = QVBoxLayout()
+        
+        # Основные поля эксперта
+        expert_group = QWidget()
+        expert_layout = QVBoxLayout(expert_group)
+        
+        # ФИО эксперта
+        name_label = QLabel("ФИО эксперта *")
+        self.name_field = QLineEdit()
+        expert_layout.addWidget(name_label)
+        expert_layout.addWidget(self.name_field)
+        
+        # Регион
+        region_label = QLabel("Регион")
+        self.region_combo = QComboBox()
+        self.region_combo.setEditable(True)
+        self.region_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        if self.db_manager:
+            regions = self.db_manager.get_regions()
+            self.region_combo.addItems(regions)
+        expert_layout.addWidget(region_label)
+        expert_layout.addWidget(self.region_combo)
+        
+        # Город
+        city_label = QLabel("Город")
+        if self.db_manager:
+            self.city_combo = CityComboBox(self.db_manager)
+            # Добавляем подсказку
+            city_hint = QLabel("Начните вводить название города (минимум 2 символа)")
+            city_hint.setStyleSheet("color: gray; font-size: 10px;")
+            expert_layout.addWidget(city_label)
+            expert_layout.addWidget(self.city_combo)
+            expert_layout.addWidget(city_hint)
+        else:
+            self.city_combo = QLineEdit()
+            expert_layout.addWidget(city_label)
+            expert_layout.addWidget(self.city_combo)
+        
+        # Ключевые слова
+        keywords_label = QLabel("Ключевые слова")
+        self.keywords_field = QLineEdit()
+        expert_layout.addWidget(keywords_label)
+        expert_layout.addWidget(self.keywords_field)
+        
+        # Количество групп
+        group_count_label = QLabel("Количество групп")
+        self.group_count_field = QLineEdit()
+        expert_layout.addWidget(group_count_label)
+        expert_layout.addWidget(self.group_count_field)
+        
+        # Дата добавления
+        date_label = QLabel("Дата добавления")
+        self.date_field = QLineEdit()
+        expert_layout.addWidget(date_label)
+        expert_layout.addWidget(self.date_field)
+        
+        main_layout.addWidget(expert_group)
+        
+        # Разделитель
+        separator = QLabel("─" * 50)
+        main_layout.addWidget(separator)
+        
+        # Коды ГРНТИ
+        grnti_group = QWidget()
+        grnti_layout = QVBoxLayout(grnti_group)
+        
+        grnti_header_layout = QHBoxLayout()
+        grnti_label = QLabel("Коды ГРНТИ")
+        self.add_grnti_button = QPushButton("+")
+        self.add_grnti_button.setMaximumWidth(30)
+        self.add_grnti_button.clicked.connect(self.add_grnti_code)
+        grnti_header_layout.addWidget(grnti_label)
+        grnti_header_layout.addStretch()
+        grnti_header_layout.addWidget(self.add_grnti_button)
+        grnti_layout.addLayout(grnti_header_layout)
+        
+        # Таблица для кодов ГРНТИ
+        self.grnti_table = QTableWidget()
+        self.grnti_table.setColumnCount(4)
+        self.grnti_table.setHorizontalHeaderLabels(["Код ГРНТИ", "Подрубрика", "Дисциплина", "Удалить"])
+        self.grnti_table.horizontalHeader().setStretchLastSection(True)
+        grnti_layout.addWidget(self.grnti_table)
+        
+        main_layout.addWidget(grnti_group)
+        
+        # Кнопки
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        main_layout.addWidget(buttons)
+        
+        self.setLayout(main_layout)
+
+    def load_expert_data(self):
+        """Загружает данные эксперта в поля формы"""
+        if not self.expert_data:
+            return
+            
+        # Заполняем поля данными эксперта
+        # expert_data содержит: [id, name, region, city, keywords, group_count, input_date]
+        if len(self.expert_data) > 1:
+            self.name_field.setText(str(self.expert_data[1]) if self.expert_data[1] else "")
+        if len(self.expert_data) > 2:
+            region = str(self.expert_data[2]) if self.expert_data[2] else ""
+            self.region_combo.setCurrentText(region)
+        if len(self.expert_data) > 3:
+            city = str(self.expert_data[3]) if self.expert_data[3] else ""
+            if hasattr(self.city_combo, 'lineEdit'):
+                self.city_combo.lineEdit().setText(city)
+            else:
+                self.city_combo.setText(city)
+        if len(self.expert_data) > 4:
+            self.keywords_field.setText(str(self.expert_data[4]) if self.expert_data[4] else "")
+        if len(self.expert_data) > 5:
+            self.group_count_field.setText(str(self.expert_data[5]) if self.expert_data[5] else "0")
+        if len(self.expert_data) > 6:
+            # Форматируем дату для отображения
+            date_value = self.expert_data[6]
+            if date_value:
+                formatted_date = DateValidator.format_date_for_display(str(date_value))
+                self.date_field.setText(formatted_date if formatted_date else str(date_value))
+
+    def load_grnti_codes(self):
+        """Загружает существующие коды ГРНТИ для эксперта"""
+        if not self.db_manager or not self.expert_id:
+            return
+            
+        try:
+            cursor = self.db_manager.connection.cursor()
+            cursor.execute("""
+                SELECT rubric, subrubric, siscipline
+                FROM expert_grnti
+                WHERE id = %s
+            """, (self.expert_id,))
+            
+            existing_codes = cursor.fetchall()
+            cursor.close()
+            
+            # Добавляем существующие коды в таблицу
+            for code, subrubric, discipline in existing_codes:
+                self.add_grnti_code_with_data(code, subrubric, discipline)
+                
+            # Если нет кодов, добавляем пустую строку
+            if not existing_codes:
+                self.add_grnti_code()
+                
+        except Exception as e:
+            print(f"Ошибка загрузки кодов ГРНТИ: {e}")
+            # Добавляем пустую строку в случае ошибки
+            self.add_grnti_code()
+
+    def add_grnti_code(self):
+        """Добавляет новую пустую строку для кода ГРНТИ"""
+        self.add_grnti_code_with_data("", "", "")
+
+    def add_grnti_code_with_data(self, code="", subrubric="", discipline=""):
+        """Добавляет новую строку для кода ГРНТИ с данными"""
+        row_count = self.grnti_table.rowCount()
+        self.grnti_table.insertRow(row_count)
+        
+        # Код ГРНТИ
+        code_item = QTableWidgetItem(str(code) if code else "")
+        self.grnti_table.setItem(row_count, 0, code_item)
+        
+        # Подрубрика
+        subrubric_item = QTableWidgetItem(str(subrubric) if subrubric else "")
+        self.grnti_table.setItem(row_count, 1, subrubric_item)
+        
+        # Дисциплина
+        discipline_item = QTableWidgetItem(str(discipline) if discipline else "")
         self.grnti_table.setItem(row_count, 2, discipline_item)
         
         # Кнопка удаления
@@ -1111,50 +1439,62 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             raw_row_data = table_data[selected_row]
             record_id = raw_row_data[0]  # ID записи из сырых данных
 
-            # Преобразуем данные в строки, обрабатывая даты отдельно
-            row_data = []
-            columns = self.db.get_columns_names(self.current_table)
-            date_columns = self.date_columns.get(self.current_table, [])
-
-            for i, value in enumerate(raw_row_data):
-                column_name = columns[i]
-                # Для таблицы expert пропускаем ID в отображаемых данных
-                if self.current_table == 'expert' and column_name == 'id':
-                    continue
-
-                if value is None:
-                    row_data.append("")
-                elif column_name in date_columns and hasattr(value, 'strftime'):
-                    formatted_date = DateValidator.format_date_for_display(value.strftime('%Y-%m-%d'))
-                    row_data.append(formatted_date if formatted_date else str(value))
-                else:
-                    row_data.append(str(value))
-
-            display_names = self.column_display_names.get(self.current_table, {})
-
-            # Для диалога используем все столбцы, включая ID (нужен для обновления)
-            dialog_columns = columns.copy()
-            if self.current_table == 'expert':
-                # Убираем ID из отображаемых столбцов в диалоге
-                dialog_display_names = display_names.copy()
+            # Специальная обработка для таблицы expert
+            if self.current_table == "expert":
+                dialog = ExpertEditDialog(raw_row_data, record_id, self, self.db)
+                if dialog.exec():
+                    expert_data = dialog.get_expert_data()
+                    grnti_codes = dialog.get_grnti_codes()
+                    
+                    self.db.update_expert_with_grnti(record_id, expert_data, grnti_codes)
+                    self.show_table(self.current_table)
+                    self.statusbar.showMessage(f"Эксперт успешно обновлен (ID: {record_id})")
             else:
-                dialog_display_names = display_names
+                # Обычная обработка для других таблиц
+                # Преобразуем данные в строки, обрабатывая даты отдельно
+                row_data = []
+                columns = self.db.get_columns_names(self.current_table)
+                date_columns = self.date_columns.get(self.current_table, [])
 
-            dialog = EditDialog(
-                self.current_table,
-                columns,  # Передаем все столбцы (включая ID)
-                [str(x) if x is not None else "" for x in raw_row_data],  # Все данные включая ID
-                parent=self,
-                display_names=dialog_display_names,
-                date_columns=date_columns
-            )
+                for i, value in enumerate(raw_row_data):
+                    column_name = columns[i]
+                    # Для таблицы expert пропускаем ID в отображаемых данных
+                    if self.current_table == 'expert' and column_name == 'id':
+                        continue
 
-            if dialog.exec():
-                data = dialog.get_data()
-                # Для обновления передаем данные без ID
-                self.db.update_record(self.current_table, record_id, data[1:])
-                self.show_table(self.current_table)
-                self.statusbar.showMessage("Запись успешно обновлена")
+                    if value is None:
+                        row_data.append("")
+                    elif column_name in date_columns and hasattr(value, 'strftime'):
+                        formatted_date = DateValidator.format_date_for_display(value.strftime('%Y-%m-%d'))
+                        row_data.append(formatted_date if formatted_date else str(value))
+                    else:
+                        row_data.append(str(value))
+
+                display_names = self.column_display_names.get(self.current_table, {})
+
+                # Для диалога используем все столбцы, включая ID (нужен для обновления)
+                dialog_columns = columns.copy()
+                if self.current_table == 'expert':
+                    # Убираем ID из отображаемых столбцов в диалоге
+                    dialog_display_names = display_names.copy()
+                else:
+                    dialog_display_names = display_names
+
+                dialog = EditDialog(
+                    self.current_table,
+                    columns,  # Передаем все столбцы (включая ID)
+                    [str(x) if x is not None else "" for x in raw_row_data],  # Все данные включая ID
+                    parent=self,
+                    display_names=dialog_display_names,
+                    date_columns=date_columns
+                )
+
+                if dialog.exec():
+                    data = dialog.get_data()
+                    # Для обновления передаем данные без ID
+                    self.db.update_record(self.current_table, record_id, data[1:])
+                    self.show_table(self.current_table)
+                    self.statusbar.showMessage("Запись успешно обновлена")
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", f"Не удалось обновить запись: {str(e)}")
             print(f"Ошибка при редактировании: {e}")
